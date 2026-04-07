@@ -26,23 +26,15 @@ import sys
 sys.dont_write_bytecode = True
 
 import nltk
-nltk.download('stopwords', quiet=True)
-nltk.download('punkt', quiet=True)
-nltk.download('punkt_tab', quiet=True)
-nltk.download('averaged_perceptron_tagger', quiet=True)
-
 import requests
 from bs4 import BeautifulSoup
 import os
-import time
 import argparse
 import random
 import re
 import json
-import socket
 
 from headers.agents import Headers
-from banner.banner import Banner
 
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -55,6 +47,30 @@ Note:
     The author is not responsible for any misuse of Darkdump.
     May God bless you all.
 '''
+
+NLTK_RESOURCES = {
+    'corpora/stopwords': 'stopwords',
+    'tokenizers/punkt': 'punkt',
+    'tokenizers/punkt_tab': 'punkt_tab',
+    'taggers/averaged_perceptron_tagger': 'averaged_perceptron_tagger',
+}
+
+_NLTK_RESOURCES_READY = False
+
+
+def ensure_nltk_resources():
+    global _NLTK_RESOURCES_READY
+
+    if _NLTK_RESOURCES_READY:
+        return
+
+    for resource_path, download_name in NLTK_RESOURCES.items():
+        try:
+            nltk.data.find(resource_path)
+        except LookupError:
+            nltk.download(download_name, quiet=True)
+
+    _NLTK_RESOURCES_READY = True
 
 class Colors:
     W = '\033[0m'  # white 
@@ -117,23 +133,38 @@ class Platform(object):
             else: os.system('cls')
         else: pass
 
-    def check_tor_connection(self, proxy_config):
+    def check_tor_connection(self, proxy_config, verbose=True):
         test_url = 'https://check.torproject.org/api/ip'
         try:
             response = requests.get(test_url, proxies=proxy_config, timeout=20)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('IsTor', False):
-                    print(f"{Colors.BOLD + Colors.G}Tor service is active.{Colors.END}")
-                    print(f"{Colors.BOLD + Colors.P}Current IP Address via Tor: {Colors.END}{data.get('IP')}")
+                    if verbose:
+                        print(f"{Colors.BOLD + Colors.G}Tor service is active.{Colors.END}")
+                        print(f"{Colors.BOLD + Colors.P}Current IP Address via Tor: {Colors.END}{data.get('IP')}")
                     return True
-            print(f"{Colors.BOLD + Colors.R}Connection successful but not through Tor.{Colors.END}")
+            if verbose:
+                print(f"{Colors.BOLD + Colors.R}Connection successful but not through Tor.{Colors.END}")
             return False
         except Exception as e:
-            print(f"{Colors.BOLD + Colors.R}Tor is inactive or not configured properly: {str(e)}{Colors.END}")
+            if verbose:
+                print(f"{Colors.BOLD + Colors.R}Tor is inactive or not configured properly: {str(e)}{Colors.END}")
             return False
 
 class Darkdump(object):
+    def build_headers(self):
+        return {'User-Agent': random.choice(Headers.user_agents)}
+
+    def build_proxy_config(self, use_proxy):
+        if not use_proxy:
+            return {}
+
+        return {
+            'http': Configuration.__socks5init__,
+            'https': Configuration.__socks5init__,
+        }
+
     def clean_text(self, html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
         text = soup.get_text()
@@ -143,6 +174,7 @@ class Darkdump(object):
         return text.strip()
 
     def extract_keywords(self, text):
+        ensure_nltk_resources()
         clean_text = self.clean_text(text)
         stop_words = set(stopwords.words('english'))
         word_tokens = word_tokenize(clean_text.lower())
@@ -152,6 +184,7 @@ class Darkdump(object):
         return keywords
 
     def analyze_text(self, text):
+        ensure_nltk_resources()
         # Tokenize text
         words = word_tokenize(text)
         # Remove stopwords
@@ -221,38 +254,173 @@ class Darkdump(object):
         links = [a['href'] for a in soup.find_all('a', href=True) if any(doc_type for doc_type in doc_types if a['href'].endswith(doc_type))]
         return links
 
-
-    def crawl(self, query, amount, use_proxy=False, scrape_sites=False, scrape_images=False, debug_mode=False):
-        headers = {'User-Agent': random.choice(Headers.user_agents)}
-        proxy_config = {'http': 'socks5h://localhost:9050', 'https': 'socks5h://localhost:9050'} if use_proxy else {}
-
-        # Fetching the initial search page
+    def fetch_search_result_nodes(self, query, headers):
         try:
             homepage = requests.get(Configuration.__darkdump_base__, headers=headers)
-            if homepage.status_code != 200:
-                raise Exception(f"Couldn't fetch {Configuration.__darkdump_base__} code {homepage.status_code}")
+        except Exception as exc:
+            raise RuntimeError(f"Couldn't fetch {Configuration.__darkdump_base__}: {exc}") from exc
 
-            soup = BeautifulSoup(homepage.content, 'html.parser')
-            nonce_el = soup.select_one('#searchForm input[type="hidden"]')
-            if nonce_el is None:
-                raise Exception("Couldn't find nonce in HomePage")
+        if homepage.status_code != 200:
+            raise RuntimeError(f"Couldn't fetch {Configuration.__darkdump_base__} code {homepage.status_code}")
 
-            nonce = f"&{nonce_el.attrs["name"]}={nonce_el.attrs["value"]}"
-            url = Configuration.__darkdump_api__ + query + nonce
+        soup = BeautifulSoup(homepage.content, 'html.parser')
+        nonce_el = soup.select_one('#searchForm input[type="hidden"]')
+        if nonce_el is None:
+            raise RuntimeError("Couldn't find nonce in HomePage")
+
+        nonce = f"&{nonce_el.attrs['name']}={nonce_el.attrs['value']}"
+        url = Configuration.__darkdump_api__ + query + nonce
+
+        try:
             page = requests.get(url, headers=headers)
-            if page.status_code != 200:
-                raise Exception(f"Couldn't fetch {url} code {page.status_code}")
+        except Exception as exc:
+            raise RuntimeError(f"Couldn't fetch {url}: {exc}") from exc
 
-            soup = BeautifulSoup(page.content, 'html.parser')
-            results = soup.find(id='ahmiaResultsPage')  # Adjust based on actual result container ID
-            if results is None:
-                raise Exception(f"Couldn't extract results from {url}")
+        if page.status_code != 200:
+            raise RuntimeError(f"Couldn't fetch {url} code {page.status_code}")
 
-            second_results = results.find_all('li', class_='result')  # Adjust based on actual results tag and class
-            if any([result is None for result in results]):
-                raise Exception(f"Couldn't parse a result from {url}")
+        soup = BeautifulSoup(page.content, 'html.parser')
+        results = soup.find(id='ahmiaResultsPage')
+        if results is None:
+            raise RuntimeError(f"Couldn't extract results from {url}")
 
-        except Exception as e:
+        return results.find_all('li', class_='result')
+
+    def parse_search_result(self, result):
+        site_node = result.find('cite')
+        if site_node is None or not site_node.text.strip():
+            raise ValueError("Couldn't find onion link in search result")
+
+        site_url = site_node.text.strip()
+        if "http://" not in site_url and "https://" not in site_url:
+            site_url = "http://" + site_url
+
+        title_node = result.find('a')
+        description_node = result.find('p')
+
+        return {
+            'title': title_node.text.strip() if title_node and title_node.text else "No title available",
+            'description': description_node.text.strip() if description_node and description_node.text else "No description available",
+            'onion_link': site_url,
+        }
+
+    def scrape_site_details(self, site_url, headers, proxy_config, scrape_images=False):
+        site_response = requests.get(site_url, headers=headers, proxies=proxy_config)
+        site_soup = BeautifulSoup(site_response.content, 'html.parser')
+        site_text = site_soup.get_text()
+
+        details = {
+            'keywords': self.extract_keywords(site_text),
+            'text_analysis': self.analyze_text(site_text),
+            'metadata': self.extract_metadata(site_soup),
+            'links': self.extract_links(site_soup),
+            'emails': self.extract_emails(site_soup),
+            'documents': self.extract_document_links(site_soup),
+            'image_urls': [],
+            'images_html_path': None,
+        }
+
+        if scrape_images:
+            images = site_soup.find_all('img')
+            image_urls = [img['src'] for img in images if img.get('src')]
+            image_urls = [url if url.startswith('http') else site_url + url for url in image_urls]
+
+            details['image_urls'] = image_urls
+            if image_urls:
+                html_path = self.generate_html(image_urls, site_url)
+                details['images_html_path'] = os.path.abspath(html_path)
+
+        return details
+
+    def collect(self, query, amount, use_proxy=True, scrape_sites=True, scrape_images=False):
+        headers = self.build_headers()
+        proxy_config = self.build_proxy_config(use_proxy)
+        result_nodes = self.fetch_search_result_nodes(query, headers)
+
+        payload = {
+            'query': query,
+            'requested_amount': amount,
+            'returned_count': 0,
+            'proxy_enabled': use_proxy,
+            'scrape_enabled': scrape_sites,
+            'images_enabled': scrape_images,
+            'tor_checked': bool(scrape_sites and use_proxy),
+            'tor_ok': False,
+            'results': [],
+            'errors': [],
+        }
+
+        if payload['tor_checked']:
+            payload['tor_ok'] = Platform(True).check_tor_connection(proxy_config, verbose=False)
+            if not payload['tor_ok']:
+                raise RuntimeError("Tor service is inactive or not configured properly.")
+        else:
+            payload['tor_ok'] = not payload['tor_checked']
+
+        seen_urls = set()
+
+        for result in result_nodes:
+            if len(payload['results']) >= amount:
+                break
+
+            try:
+                parsed_result = self.parse_search_result(result)
+            except Exception as exc:
+                payload['errors'].append({
+                    'stage': 'result',
+                    'url': None,
+                    'message': str(exc),
+                })
+                continue
+
+            site_url = parsed_result['onion_link']
+            if site_url in seen_urls:
+                continue
+            seen_urls.add(site_url)
+
+            if not scrape_sites:
+                payload['results'].append({
+                    'index': len(payload['results']) + 1,
+                    'title': parsed_result['title'],
+                    'description': parsed_result['description'],
+                    'onion_link': site_url,
+                })
+                continue
+
+            try:
+                site_details = self.scrape_site_details(site_url, headers, proxy_config, scrape_images=scrape_images)
+            except Exception as exc:
+                payload['errors'].append({
+                    'stage': 'site',
+                    'url': site_url,
+                    'message': str(exc),
+                })
+                continue
+
+            payload['results'].append({
+                'index': len(payload['results']) + 1,
+                'title': parsed_result['title'],
+                'description': parsed_result['description'],
+                'onion_link': site_url,
+                'keywords': site_details['keywords'],
+                'sentiment': site_details['text_analysis']['sentiment'],
+                'metadata': site_details['metadata'],
+                'links': site_details['links'],
+                'link_count': len(site_details['links']),
+                'emails': site_details['emails'],
+                'documents': site_details['documents'],
+            })
+
+        payload['returned_count'] = len(payload['results'])
+        return payload
+
+    def crawl(self, query, amount, use_proxy=False, scrape_sites=False, scrape_images=False, debug_mode=False):
+        headers = self.build_headers()
+        proxy_config = self.build_proxy_config(use_proxy)
+
+        try:
+            second_results = self.fetch_search_result_nodes(query, headers)
+        except RuntimeError as e:
             print(f"{Colors.BOLD + Colors.R} Error in fetching Ahmia.fi: {e} {Colors.END}")
             return
 
@@ -262,48 +430,43 @@ class Darkdump(object):
             if Platform(True).check_tor_connection(proxy_config) == False: return
 
         for idx, result in enumerate(second_results[:min(amount + 1, len(second_results))], start=1):
-            site_url = result.find('cite').text
-            if "http://" not in site_url and "https://" not in site_url:
-                site_url = "http://" + site_url
+            try:
+                parsed_result = self.parse_search_result(result)
+            except Exception as e:
+                if debug_mode:
+                    print(f"{Colors.BOLD + Colors.R}[DEBUG] Exception: {e}{Colors.END}")
+                continue
+
+            site_url = parsed_result['onion_link']
 
             if site_url in seen_urls:
                 continue
             seen_urls.add(site_url)
             
-            title = result.find('a').text if result.find('a') else "No title available"
-            description = result.find('p').text if result.find('p') else "No description available"
+            title = parsed_result['title']
+            description = parsed_result['description']
             try:
                 if scrape_sites:
                     try:
-                        site_response = requests.get(site_url, headers=headers, proxies=proxy_config)
-                        site_soup = BeautifulSoup(site_response.content, 'html.parser')
-                        text_analysis = self.analyze_text(site_soup.get_text())
-                        metadata = self.extract_metadata(site_soup)
-                        links = self.extract_links(site_soup)
-                        emails = self.extract_emails(site_soup)
-                        documents = self.extract_document_links(site_soup)
+                        site_details = self.scrape_site_details(site_url, headers, proxy_config, scrape_images=scrape_images)
+                        images_str = ""
 
-                        if scrape_images:
-                            images = site_soup.find_all('img')
-                            image_urls = [img['src'] for img in images if img.get('src')]
-                            image_urls = [url if url.startswith('http') else site_url + url for url in image_urls]
-
-                            html_path = self.generate_html(image_urls, site_url)
-                            images_str = f"{Colors.BOLD}| Images Gallery: {Colors.END}{Colors.G}{os.path.abspath(html_path)}{Colors.END}\n"
+                        if scrape_images and site_details['images_html_path']:
+                            images_str = f"{Colors.BOLD}| Images Gallery: {Colors.END}{Colors.G}{site_details['images_html_path']}{Colors.END}\n"
 
                         print('-' * 50)
                         print(f"{Colors.BOLD}{idx + 1}.\n --- [+] Website: {Colors.END}{Colors.P}{title.strip()}{Colors.END}")
                         print(f"{Colors.BOLD}| Information: {Colors.END}{Colors.G}{description.strip()}{Colors.END}")
                         print(f"{Colors.BOLD}| Onion Link: {Colors.END}{Colors.G}{site_url}{Colors.END}")
-                        print(f"{Colors.BOLD}| Keywords: {Colors.END}{Colors.G}{', '.join(self.extract_keywords(site_soup.get_text()))}{Colors.END}")
-                        print(f"{Colors.BOLD}\t- Sentiment: Polarity = {text_analysis['sentiment']['polarity']:.2f}, Subjectivity = {text_analysis['sentiment']['subjectivity']:.2f}")
-                        print(f"{Colors.BOLD}| Metadata: {Colors.END}{Colors.G}{json.dumps(metadata)}{Colors.END}")
-                        print(f"{Colors.BOLD}| Links Found: {Colors.END}{Colors.G}{len(links)}{Colors.END}")
-                        print(f"{Colors.BOLD}| Emails Found: {Colors.END}{Colors.G}{', '.join(emails) if emails else 'No emails found.'}{Colors.END}")
-                        print(f"{Colors.BOLD}| Documents Found: {Colors.END}{Colors.G}{', '.join(documents) if documents else 'No document links found.'}{Colors.END}")
+                        print(f"{Colors.BOLD}| Keywords: {Colors.END}{Colors.G}{', '.join(site_details['keywords'])}{Colors.END}")
+                        print(f"{Colors.BOLD}\t- Sentiment: Polarity = {site_details['text_analysis']['sentiment']['polarity']:.2f}, Subjectivity = {site_details['text_analysis']['sentiment']['subjectivity']:.2f}")
+                        print(f"{Colors.BOLD}| Metadata: {Colors.END}{Colors.G}{json.dumps(site_details['metadata'])}{Colors.END}")
+                        print(f"{Colors.BOLD}| Links Found: {Colors.END}{Colors.G}{len(site_details['links'])}{Colors.END}")
+                        print(f"{Colors.BOLD}| Emails Found: {Colors.END}{Colors.G}{', '.join(site_details['emails']) if site_details['emails'] else 'No emails found.'}{Colors.END}")
+                        print(f"{Colors.BOLD}| Documents Found: {Colors.END}{Colors.G}{', '.join(site_details['documents']) if site_details['documents'] else 'No document links found.'}{Colors.END}")
 
                         if scrape_images:
-                            if image_urls:
+                            if site_details['image_urls']:
                                 print(images_str)
                             else: print(f"{Colors.BOLD + Colors.GR} No images found. Skipping parse. {Colors.END}")
 
@@ -324,6 +487,7 @@ class Darkdump(object):
 
 def darkdump_main():
     clr = Colors()
+    from banner.banner import Banner
     bn = Banner()
 
     Platform(True).clean_screen()

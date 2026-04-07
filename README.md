@@ -44,6 +44,22 @@ MacOS: `brew services start tor`<br/>
 `python3.12 darkdump.py -q "free movies" -a 25` - don't scrape, just return 25 links for that query (does not require tor) <br/>
 `python3.12 darkdump.py -q "marketplaces" -a 15 --scrape --proxy -i` - search for 10 links and scrape each site as well as find and store images.
 
+### Python API
+If you want to collect data programmatically instead of using CLI output:
+
+```python
+from darkdump_collector import collect_dark_net
+
+data = collect_dark_net("marketplaces", 5)
+print(data["returned_count"])
+print(data["results"][0]["onion_link"])
+```
+
+`collect_dark_net` follows the same collection path as:
+`python3.12 darkdump.py -q "marketplaces" -a 5 --scrape --proxy`
+
+It returns structured data instead of printing the banner and per-site CLI output.
+
 ## Menu
 ```
 
