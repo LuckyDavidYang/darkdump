@@ -6,8 +6,15 @@ Darkdump is a OSINT interface for carrying out deep web investgations written in
 ## Installation
 1) ``git clone https://github.com/LuckyDavidYang/darkdump.git``<br/>
 2) ``cd darkdump``<br/>
-3) ``python3 -m pip install -r requirements.txt``<br/>
-4) ``python3 darkdump.py --help``<br/>
+3) ``python3.12 -m pip install -r requirements.txt``<br/>
+4) ``python3.12 -c "import nltk; nltk.download('stopwords'); nltk.download('punkt_tab')"``
+5) ``sh "/Applications/Python 3.12/Install Certificates.command"``
+6) ``python3.12 -m pip install -U certifi nltk``
+7) ``python3.12 -c "import nltk; nltk.download('stopwords'); nltk.download('punkt_tab')"``
+8) ``python3.12 darkdump.py --help``<br/>
+
+### Python Version
+Darkdump is expected to run with `Python 3.12`.<br/>
 
 ### Tor Configuration 
 To use Darkdump effectively, you need to configure Tor to allow your script to control it via the Tor control port. Here's how to set up your `torrc` file and verify that Tor is running: <br/>
@@ -33,9 +40,9 @@ Linux: `sudo systemctl start tor.service`<br/>
 MacOS: `brew services start tor`<br/>
 
 ### Example Queries: 
-`python3 darkdump.py -q "hacking" -a 10 --scrape --proxy` - search for 10 links and scrape each site <br/>
-`python3 darkdump.py -q "free movies" -a 25` - don't scrape, just return 25 links for that query (does not require tor) <br/>
-`python3 darkdump.py -q "marketplaces" -a 15 --scrape --proxy -i` - search for 10 links and scrape each site as well as find and store images.
+`python3.12 darkdump.py -q "hacking" -a 10 --scrape --proxy` - search for 10 links and scrape each site <br/>
+`python3.12 darkdump.py -q "free movies" -a 25` - don't scrape, just return 25 links for that query (does not require tor) <br/>
+`python3.12 darkdump.py -q "marketplaces" -a 15 --scrape --proxy -i` - search for 10 links and scrape each site as well as find and store images.
 
 ## Menu
 ```
