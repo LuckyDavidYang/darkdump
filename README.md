@@ -44,7 +44,7 @@ MacOS: `brew services start tor`<br/>
   __| | __ _ _ __| | ____| |_   _ _ __ ___  _ __      / /
  / _` |/ _` | '__| |/ / _` | | | | '_ ` _ \| '_ \    / / 
 | (_| | (_| | |  |   < (_| | |_| | | | | | | |_) |  / /  
- \__,_|\__,_|_|  |_|\_\__,_|\__,_|_| |_| |_| .__/  /_/  v3 by Josh Schiavone 
+ \__,_|\__,_|_|  |_|\_\__,_|\__,_|_| |_| |_| .__/  /_/  v3 
                                            |_|           
 
 usage: darkdump.py [-h] [-v] [-q QUERY] [-a AMOUNT] [-p] [-i] [-s]
@@ -69,8 +69,8 @@ options:
 </p>
 
 ## Ethical Notice
-The developer of this program, Josh Schiavone, is not resposible for misuse of this data gathering tool. Do not use darkdump to navigate websites that take part in any activity that is identified as illegal under the laws and regulations of your government. May God bless you all. 
+The developer of this program, is not resposible for misuse of this data gathering tool. Do not use darkdump to navigate websites that take part in any activity that is identified as illegal under the laws and regulations of your government. May God bless you all. 
 
 ## License 
 MIT License<br/>
-Copyright (c) Josh Schiavone
+Copyright (c) 

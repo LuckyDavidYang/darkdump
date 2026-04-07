@@ -1,7 +1,5 @@
 '''
 MIT License
-Copyright (c) 2024 Josh Schiavone
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -33,7 +31,7 @@ class Banner(object):
   __| | __ _ _ __| | ____| |_   _ _ __ ___  _ __      / /
  / _` |/ _` | '__| |/ / _` | | | | '_ ` _ \| '_ \    / / 
 | (_| | (_| | |  |   < (_| | |_| | | | | | | |_) |  / /  
- \__,_|\__,_|_|  |_|\_\__,_|\__,_|_| |_| |_| .__/  /_/  v3 by Josh Schiavone 
+ \__,_|\__,_|_|  |_|\_\__,_|\__,_|_| |_| |_| .__/  /_/  v3 
                                            |_|           
               '''
 
