@@ -52,6 +52,7 @@ from darkdump_collector import collect_dark_net
 
 data = collect_dark_net("marketplaces", 5)
 print(data["returned_count"])
+print(data["tor_ip"])
 print(data["results"][0]["onion_link"])
 ```
 
@@ -59,6 +60,8 @@ print(data["results"][0]["onion_link"])
 `python3.12 darkdump.py -q "marketplaces" -a 5 --scrape --proxy`
 
 It returns structured data instead of printing the banner and per-site CLI output.
+When Tor is connected, the returned payload also includes `tor_ip`, for example:
+`Current IP Address via Tor: 185.220.101.1`
 
 ## Menu
 ```

@@ -133,17 +133,27 @@ class Platform(object):
             else: os.system('cls')
         else: pass
 
-    def check_tor_connection(self, proxy_config, verbose=True):
+    def get_tor_connection_status(self, proxy_config):
         test_url = 'https://check.torproject.org/api/ip'
+        response = requests.get(test_url, proxies=proxy_config, timeout=20)
+        if response.status_code != 200:
+            return False, None
+
+        data = response.json()
+        if not data.get('IsTor', False):
+            return False, None
+
+        tor_ip = data.get('IP')
+        return True, tor_ip
+
+    def check_tor_connection(self, proxy_config, verbose=True):
         try:
-            response = requests.get(test_url, proxies=proxy_config, timeout=20)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('IsTor', False):
-                    if verbose:
-                        print(f"{Colors.BOLD + Colors.G}Tor service is active.{Colors.END}")
-                        print(f"{Colors.BOLD + Colors.P}Current IP Address via Tor: {Colors.END}{data.get('IP')}")
-                    return True
+            is_tor, tor_ip = self.get_tor_connection_status(proxy_config)
+            if is_tor:
+                if verbose:
+                    print(f"{Colors.BOLD + Colors.G}Tor service is active.{Colors.END}")
+                    print(f"{Colors.BOLD + Colors.P}Current IP Address via Tor: {Colors.END}{tor_ip}")
+                return True
             if verbose:
                 print(f"{Colors.BOLD + Colors.R}Connection successful but not through Tor.{Colors.END}")
             return False
@@ -346,14 +356,20 @@ class Darkdump(object):
             'images_enabled': scrape_images,
             'tor_checked': bool(scrape_sites and use_proxy),
             'tor_ok': False,
+            'tor_ip': None,
             'results': [],
             'errors': [],
         }
 
         if payload['tor_checked']:
-            payload['tor_ok'] = Platform(True).check_tor_connection(proxy_config, verbose=False)
+            try:
+                payload['tor_ok'], tor_ip = Platform(True).get_tor_connection_status(proxy_config)
+            except Exception as exc:
+                raise RuntimeError("Tor service is inactive or not configured properly.") from exc
+
             if not payload['tor_ok']:
                 raise RuntimeError("Tor service is inactive or not configured properly.")
+            payload['tor_ip'] = f"Current IP Address via Tor: {tor_ip}"
         else:
             payload['tor_ok'] = not payload['tor_checked']
 

@@ -94,12 +94,12 @@ class CollectDarkNetTests(unittest.TestCase):
 
     @patch("darkdump.Darkdump.analyze_text")
     @patch("darkdump.Darkdump.extract_keywords")
-    @patch("darkdump.Platform.check_tor_connection", return_value=True)
+    @patch("darkdump.Platform.get_tor_connection_status", return_value=(True, "185.220.101.1"))
     @patch("darkdump.requests.get")
     def test_collect_dark_net_returns_structured_results(
         self,
         mock_get,
-        _mock_tor_check,
+        _mock_tor_status,
         mock_extract_keywords,
         mock_analyze_text,
     ):
@@ -126,6 +126,7 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertFalse(result["images_enabled"])
         self.assertTrue(result["tor_checked"])
         self.assertTrue(result["tor_ok"])
+        self.assertEqual(result["tor_ip"], "Current IP Address via Tor: 185.220.101.1")
         self.assertEqual(result["errors"], [])
         self.assertEqual(len(result["results"]), 2)
 
@@ -163,9 +164,9 @@ class CollectDarkNetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collect_dark_net("markets", 0)
 
-    @patch("darkdump.Platform.check_tor_connection", return_value=False)
+    @patch("darkdump.Platform.get_tor_connection_status", return_value=(False, None))
     @patch("darkdump.requests.get")
-    def test_collect_dark_net_raises_when_tor_check_fails(self, mock_get, _mock_tor_check):
+    def test_collect_dark_net_raises_when_tor_check_fails(self, mock_get, _mock_tor_status):
         mock_get.side_effect = [
             FakeResponse(content=HOMEPAGE_HTML),
             FakeResponse(content=SEARCH_RESULTS_HTML),
@@ -212,12 +213,12 @@ class CollectDarkNetTests(unittest.TestCase):
 
     @patch("darkdump.Darkdump.analyze_text", return_value={"top_words": [], "sentiment": {"polarity": 0.0, "subjectivity": 0.0}})
     @patch("darkdump.Darkdump.extract_keywords", return_value=["survivor"])
-    @patch("darkdump.Platform.check_tor_connection", return_value=True)
+    @patch("darkdump.Platform.get_tor_connection_status", return_value=(True, "185.220.101.2"))
     @patch("darkdump.requests.get")
     def test_collect_dark_net_records_site_errors_and_continues(
         self,
         mock_get,
-        _mock_tor_check,
+        _mock_tor_status,
         _mock_extract_keywords,
         _mock_analyze_text,
     ):
@@ -234,18 +235,19 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(result["returned_count"], 1)
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(result["tor_ip"], "Current IP Address via Tor: 185.220.101.2")
         self.assertEqual(result["errors"][0]["stage"], "site")
         self.assertEqual(result["errors"][0]["url"], "http://alpha.onion")
         self.assertIn("dead onion", result["errors"][0]["message"])
 
     @patch("darkdump.Darkdump.analyze_text", return_value={"top_words": [], "sentiment": {"polarity": 0.0, "subjectivity": 0.0}})
     @patch("darkdump.Darkdump.extract_keywords", return_value=["limited"])
-    @patch("darkdump.Platform.check_tor_connection", return_value=True)
+    @patch("darkdump.Platform.get_tor_connection_status", return_value=(True, "185.220.101.3"))
     @patch("darkdump.requests.get")
     def test_collect_dark_net_limits_results_to_requested_amount(
         self,
         mock_get,
-        _mock_tor_check,
+        _mock_tor_status,
         _mock_extract_keywords,
         _mock_analyze_text,
     ):
@@ -263,6 +265,20 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(result["returned_count"], 2)
         self.assertEqual(len(result["results"]), 2)
         self.assertEqual(mock_get.call_count, 4)
+
+    @patch("darkdump.Platform.get_tor_connection_status", side_effect=RuntimeError("tor unavailable"))
+    @patch("darkdump.requests.get")
+    def test_collect_dark_net_raises_when_tor_status_lookup_errors(self, mock_get, _mock_tor_status):
+        mock_get.side_effect = [
+            FakeResponse(content=HOMEPAGE_HTML),
+            FakeResponse(content=SEARCH_RESULTS_HTML),
+        ]
+
+        collect_dark_net = get_collect_dark_net()
+        with self.assertRaises(RuntimeError) as context:
+            collect_dark_net("markets", 2)
+
+        self.assertIn("Tor", str(context.exception))
 
 
 if __name__ == "__main__":

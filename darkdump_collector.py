@@ -24,3 +24,7 @@ def collect_dark_net(key_word, amount):
         scrape_sites=True,
         scrape_images=False,
     )
+
+if __name__ == '__main__':
+    result = collect_dark_net('长沙', 20)
+    print(result)
