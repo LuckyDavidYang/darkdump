@@ -4,7 +4,7 @@
 Darkdump is a OSINT interface for carrying out deep web investgations written in python in which it allows users to enter a search query in which darkdump provides the ability to scrape .onion sites relating to that query to try to extract emails, metadata, keywords, images, social media etc. Darkdump retrieves sites via Ahmia.fi and scrapes those .onion addresses when connected via the tor network. 
 
 ## Installation
-1) ``git clone https://github.com/josh0xA/darkdump``<br/>
+1) ``git clone https://github.com/LuckyDavidYang/darkdump.git``<br/>
 2) ``cd darkdump``<br/>
 3) ``python3 -m pip install -r requirements.txt``<br/>
 4) ``python3 darkdump.py --help``<br/>

@@ -55,7 +55,6 @@ Note:
     This tool is not to be used for illegal purposes.
     The author is not responsible for any misuse of Darkdump.
     May God bless you all.
-    https://joshschiavone.com - https://github.com/josh0xA
 '''
 
 class Colors:
