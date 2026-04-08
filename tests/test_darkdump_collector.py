@@ -1,4 +1,5 @@
 import importlib
+import io
 import json
 import os
 import sys
@@ -171,6 +172,56 @@ class CollectDarkNetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collect_dark_net("markets", 0)
 
+    def test_collect_dark_net_rejects_invalid_retry_times(self):
+        collect_dark_net = get_collect_dark_net()
+
+        with self.assertRaises(TypeError):
+            collect_dark_net("markets", 1, retry_times="3")
+
+        with self.assertRaises(TypeError):
+            collect_dark_net("markets", 1, retry_times=True)
+
+        with self.assertRaises(ValueError):
+            collect_dark_net("markets", 1, retry_times=-1)
+
+    @patch("darkdump_collector.Darkdump.collect")
+    def test_collect_dark_net_retries_runtime_errors_until_success(self, mock_collect):
+        collect_dark_net = get_collect_dark_net()
+        expected_result = {
+            "query": "markets",
+            "requested_amount": 1,
+            "returned_count": 0,
+            "proxy_enabled": True,
+            "scrape_enabled": True,
+            "images_enabled": False,
+            "tor_checked": True,
+            "tor_ok": True,
+            "tor_ip": "Current IP Address via Tor: 185.220.101.1",
+            "errors": [],
+            "results": [],
+        }
+        mock_collect.side_effect = [
+            RuntimeError("temporary failure"),
+            RuntimeError("temporary failure"),
+            expected_result,
+        ]
+
+        result = collect_dark_net("markets", 1)
+
+        self.assertEqual(result, expected_result)
+        self.assertEqual(mock_collect.call_count, 3)
+
+    @patch("darkdump_collector.Darkdump.collect")
+    def test_collect_dark_net_raises_after_exhausting_default_retries(self, mock_collect):
+        collect_dark_net = get_collect_dark_net()
+        mock_collect.side_effect = RuntimeError("persistent failure")
+
+        with self.assertRaises(RuntimeError) as context:
+            collect_dark_net("markets", 1)
+
+        self.assertIn("persistent failure", str(context.exception))
+        self.assertEqual(mock_collect.call_count, 4)
+
     @patch("darkdump.Platform.get_tor_connection_status", return_value=(False, None))
     @patch("darkdump.requests.get")
     def test_collect_dark_net_raises_when_tor_check_fails(self, mock_get, _mock_tor_status):
@@ -181,7 +232,7 @@ class CollectDarkNetTests(unittest.TestCase):
 
         collect_dark_net = get_collect_dark_net()
         with self.assertRaises(RuntimeError) as context:
-            collect_dark_net("markets", 2)
+            collect_dark_net("markets", 2, retry_times=0)
 
         self.assertIn("Tor", str(context.exception))
 
@@ -214,7 +265,7 @@ class CollectDarkNetTests(unittest.TestCase):
 
         collect_dark_net = get_collect_dark_net()
         with self.assertRaises(RuntimeError) as context:
-            collect_dark_net("markets", 1)
+            collect_dark_net("markets", 1, retry_times=0)
 
         self.assertIn("extract results", str(context.exception))
 
@@ -283,7 +334,7 @@ class CollectDarkNetTests(unittest.TestCase):
 
         collect_dark_net = get_collect_dark_net()
         with self.assertRaises(RuntimeError) as context:
-            collect_dark_net("markets", 2)
+            collect_dark_net("markets", 2, retry_times=0)
 
         self.assertIn("Tor", str(context.exception))
 
@@ -533,6 +584,44 @@ class CollectDarkNetTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][0], "采集日期")
+
+    def test_default_key_words_are_ten_non_empty_strings(self):
+        module = get_darkdump_collector_module()
+
+        self.assertEqual(len(module.DEFAULT_KEY_WORDS), 10)
+        self.assertTrue(all(isinstance(key_word, str) and key_word.strip() for key_word in module.DEFAULT_KEY_WORDS))
+        self.assertEqual(module.DEFAULT_AMOUNT, 20)
+
+    @patch("darkdump_collector.save_batch_collect_dark_net_to_excel", return_value="/tmp/darkdump_batch_results_20260408_153000.xlsx")
+    @patch("darkdump_collector.batch_collect_dark_net")
+    def test_main_uses_defaults_and_prints_summary(self, mock_batch_collect, mock_save_excel):
+        module = get_darkdump_collector_module()
+        mock_batch_collect.return_value = {
+            "requested_amount": 20,
+            "keywords": module.DEFAULT_KEY_WORDS,
+            "success_count": 8,
+            "failure_count": 2,
+            "items": [],
+        }
+
+        with patch("sys.stdout", new_callable=io.StringIO) as fake_stdout:
+            result = module.main()
+
+        mock_batch_collect.assert_called_once_with(module.DEFAULT_KEY_WORDS, 20)
+        save_args = mock_save_excel.call_args[0]
+        self.assertEqual(save_args[0], mock_batch_collect.return_value)
+        self.assertRegex(save_args[1], r"^darkdump_batch_results_\d{8}_\d{6}\.xlsx$")
+
+        self.assertEqual(result["key_words"], module.DEFAULT_KEY_WORDS)
+        self.assertEqual(result["amount"], 20)
+        self.assertEqual(result["batch_result"], mock_batch_collect.return_value)
+        self.assertEqual(result["excel_path"], "/tmp/darkdump_batch_results_20260408_153000.xlsx")
+
+        stdout = fake_stdout.getvalue()
+        self.assertIn("Keyword count: 10", stdout)
+        self.assertIn("Amount per keyword: 20", stdout)
+        self.assertIn("Success count: 8, Failure count: 2", stdout)
+        self.assertIn("Excel saved to: /tmp/darkdump_batch_results_20260408_153000.xlsx", stdout)
 
 
 if __name__ == "__main__":

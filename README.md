@@ -68,11 +68,13 @@ print(excel_path)
 `python3.12 darkdump.py -q "marketplaces" -a 5 --scrape --proxy`
 
 It returns structured data instead of printing the banner and per-site CLI output.
+Runtime collection failures are retried automatically, with `retry_times=3` by default.
 When Tor is connected, the returned payload also includes `tor_ip`, for example:
 `Current IP Address via Tor: 185.220.101.1`
 
 `batch_collect_dark_net` processes a list of keywords with the same `amount`.
 `save_batch_collect_dark_net_to_excel` writes one Excel row per `collect_dark_net(... )["results"]` item and keeps the worksheet name as `results`.
+`python3.12 darkdump_collector.py` runs the built-in `main()` flow with 10 editable default keywords, uses `amount=20`, and saves a timestamped Excel file such as `darkdump_batch_results_20260408_153000.xlsx`.
 
 ## Menu
 ```
