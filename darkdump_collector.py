@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,7 @@ DEFAULT_KEY_WORDS = DEFAULT_KEY_WORDS_STR.split(',')
 
 DEFAULT_AMOUNT = 20
 DEFAULT_RETRY_TIMES = 3
+DEFAULT_PROCESSES = 10
 
 
 def _validate_keyword(key_word):
@@ -83,13 +85,35 @@ def _validate_retry_times(retry_times):
     return retry_times
 
 
+def _validate_processes(processes):
+    if isinstance(processes, bool) or not isinstance(processes, int):
+        raise TypeError("processes must be an integer.")
+
+    if processes <= 0:
+        raise ValueError("processes must be greater than 0.")
+
+    return processes
+
+
 def _serialize_excel_value(value):
     if isinstance(value, (list, dict)):
         return json.dumps(value, ensure_ascii=False)
     return value
 
 
-def collect_dark_net(key_word, amount, retry_times=DEFAULT_RETRY_TIMES):
+def _print_collect_summary(query, returned_count, tor_ip, error_count, error_message=None):
+    summary = (
+        f"[collect_dark_net] query={query} "
+        f"returned_count={returned_count} "
+        f"tor_ip={tor_ip} "
+        f"error_count={error_count}"
+    )
+    if error_message is not None:
+        summary += f" error={error_message}"
+    print(summary)
+
+
+def _execute_collect_dark_net(key_word, amount, retry_times, print_summary):
     normalized_keyword = _validate_keyword(key_word)
     amount = _validate_amount(amount)
     retry_times = _validate_retry_times(retry_times)
@@ -97,7 +121,7 @@ def collect_dark_net(key_word, amount, retry_times=DEFAULT_RETRY_TIMES):
     last_exception = None
     for _ in range(retry_times + 1):
         try:
-            return Darkdump().collect(
+            result = Darkdump().collect(
                 normalized_keyword,
                 amount,
                 use_proxy=True,
@@ -106,12 +130,68 @@ def collect_dark_net(key_word, amount, retry_times=DEFAULT_RETRY_TIMES):
             )
         except Exception as exc:
             last_exception = exc
+            continue
 
+        if print_summary:
+            _print_collect_summary(
+                result.get("query", normalized_keyword),
+                result.get("returned_count", 0),
+                result.get("tor_ip"),
+                len(result.get("errors") or []),
+            )
+        return result
+
+    if print_summary:
+        _print_collect_summary(
+            normalized_keyword,
+            0,
+            None,
+            1,
+            str(last_exception),
+        )
     raise last_exception
 
 
-def batch_collect_dark_net(key_words, amount):
+def _batch_collect_worker(index, key_word, amount, retry_times):
+    now = datetime.now()
+    item = {
+        "collected_date": now.strftime("%Y-%m-%d"),
+        "collected_time": now.strftime("%H:%M:%S"),
+        "search_keyword": key_word,
+    }
+
+    try:
+        collect_result = _execute_collect_dark_net(
+            key_word,
+            amount,
+            retry_times,
+            print_summary=False,
+        )
+    except Exception as exc:
+        item["status"] = "error"
+        item["error"] = str(exc)
+    else:
+        item["status"] = "success"
+        item["collect_result"] = collect_result
+
+    return {
+        "index": index,
+        "item": item,
+    }
+
+
+def collect_dark_net(key_word, amount, retry_times=DEFAULT_RETRY_TIMES):
+    return _execute_collect_dark_net(
+        key_word,
+        amount,
+        retry_times,
+        print_summary=True,
+    )
+
+
+def batch_collect_dark_net(key_words, amount, processes=DEFAULT_PROCESSES):
     amount = _validate_amount(amount)
+    processes = _validate_processes(processes)
 
     if not isinstance(key_words, (list, tuple)):
         raise TypeError("key_words must be a list or tuple of strings.")
@@ -128,26 +208,60 @@ def batch_collect_dark_net(key_words, amount):
         "items": [],
     }
 
-    for key_word in normalized_keywords:
-        now = datetime.now()
-        item = {
-            "collected_date": now.strftime("%Y-%m-%d"),
-            "collected_time": now.strftime("%H:%M:%S"),
-            "search_keyword": key_word,
+    worker_count = min(processes, len(normalized_keywords))
+    ordered_items = [None] * len(normalized_keywords)
+
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        future_to_index = {
+            executor.submit(
+                _batch_collect_worker,
+                index,
+                key_word,
+                amount,
+                DEFAULT_RETRY_TIMES,
+            ): index
+            for index, key_word in enumerate(normalized_keywords)
         }
 
-        try:
-            collect_result = collect_dark_net(key_word, amount)
-        except Exception as exc:
-            item["status"] = "error"
-            item["error"] = str(exc)
-            batch_result["failure_count"] += 1
-        else:
-            item["status"] = "success"
-            item["collect_result"] = collect_result
-            batch_result["success_count"] += 1
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            key_word = normalized_keywords[index]
 
-        batch_result["items"].append(item)
+            try:
+                worker_result = future.result()
+                item = worker_result["item"]
+            except Exception as exc:
+                now = datetime.now()
+                item = {
+                    "collected_date": now.strftime("%Y-%m-%d"),
+                    "collected_time": now.strftime("%H:%M:%S"),
+                    "search_keyword": key_word,
+                    "status": "error",
+                    "error": str(exc),
+                }
+
+            ordered_items[index] = item
+
+            if item["status"] == "success":
+                batch_result["success_count"] += 1
+                collect_result = item["collect_result"]
+                _print_collect_summary(
+                    collect_result.get("query", key_word),
+                    collect_result.get("returned_count", 0),
+                    collect_result.get("tor_ip"),
+                    len(collect_result.get("errors") or []),
+                )
+            else:
+                batch_result["failure_count"] += 1
+                _print_collect_summary(
+                    key_word,
+                    0,
+                    None,
+                    1,
+                    item["error"],
+                )
+
+    batch_result["items"] = ordered_items
 
     return batch_result
 

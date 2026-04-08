@@ -87,6 +87,35 @@ def get_darkdump_collector_module():
     return importlib.import_module("darkdump_collector")
 
 
+class FakeFuture:
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+
+    def result(self):
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+class FakeProcessPoolExecutor:
+    def __init__(self, max_workers, future_factory):
+        self.max_workers = max_workers
+        self.future_factory = future_factory
+        self.submitted = []
+
+    def submit(self, fn, *args, **kwargs):
+        future = self.future_factory(fn, *args, **kwargs)
+        self.submitted.append((fn, args, kwargs, future))
+        return future
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 class CollectDarkNetTests(unittest.TestCase):
     def test_importing_darkdump_collector_has_no_syntax_warnings(self):
         for module_name in ("darkdump_collector", "darkdump"):
@@ -124,7 +153,8 @@ class CollectDarkNetTests(unittest.TestCase):
         ]
 
         collect_dark_net = get_collect_dark_net()
-        result = collect_dark_net(" markets ", 2)
+        with patch("sys.stdout", new_callable=io.StringIO) as fake_stdout:
+            result = collect_dark_net(" markets ", 2)
 
         self.assertEqual(result["query"], "markets")
         self.assertEqual(result["requested_amount"], 2)
@@ -150,6 +180,12 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertIn("https://example.com", first_result["links"])
         self.assertIn("ops@alpha.onion", first_result["emails"])
         self.assertEqual(first_result["documents"], ["docs/report.pdf"])
+
+        stdout = fake_stdout.getvalue()
+        self.assertIn("query=markets", stdout)
+        self.assertIn("returned_count=2", stdout)
+        self.assertIn("tor_ip=Current IP Address via Tor: 185.220.101.1", stdout)
+        self.assertIn("error_count=0", stdout)
 
     def test_collect_dark_net_rejects_invalid_keyword(self):
         collect_dark_net = get_collect_dark_net()
@@ -206,21 +242,32 @@ class CollectDarkNetTests(unittest.TestCase):
             expected_result,
         ]
 
-        result = collect_dark_net("markets", 1)
+        with patch("sys.stdout", new_callable=io.StringIO) as fake_stdout:
+            result = collect_dark_net("markets", 1)
 
         self.assertEqual(result, expected_result)
         self.assertEqual(mock_collect.call_count, 3)
+        stdout = fake_stdout.getvalue()
+        self.assertEqual(stdout.count("query=markets"), 1)
+        self.assertIn("error_count=0", stdout)
 
     @patch("darkdump_collector.Darkdump.collect")
     def test_collect_dark_net_raises_after_exhausting_default_retries(self, mock_collect):
         collect_dark_net = get_collect_dark_net()
         mock_collect.side_effect = RuntimeError("persistent failure")
 
-        with self.assertRaises(RuntimeError) as context:
-            collect_dark_net("markets", 1)
+        with patch("sys.stdout", new_callable=io.StringIO) as fake_stdout:
+            with self.assertRaises(RuntimeError) as context:
+                collect_dark_net("markets", 1)
 
         self.assertIn("persistent failure", str(context.exception))
         self.assertEqual(mock_collect.call_count, 4)
+        stdout = fake_stdout.getvalue()
+        self.assertIn("query=markets", stdout)
+        self.assertIn("returned_count=0", stdout)
+        self.assertIn("tor_ip=None", stdout)
+        self.assertIn("error_count=1", stdout)
+        self.assertIn("persistent failure", stdout)
 
     @patch("darkdump.Platform.get_tor_connection_status", return_value=(False, None))
     @patch("darkdump.requests.get")
@@ -338,40 +385,67 @@ class CollectDarkNetTests(unittest.TestCase):
 
         self.assertIn("Tor", str(context.exception))
 
-    @patch("darkdump_collector.collect_dark_net")
-    def test_batch_collect_dark_net_returns_success_items(self, mock_collect_dark_net):
+    def test_batch_collect_dark_net_rejects_invalid_processes(self):
         module = get_darkdump_collector_module()
-        mock_collect_dark_net.side_effect = [
-            {
-                "query": "alpha",
-                "requested_amount": 2,
-                "returned_count": 1,
-                "proxy_enabled": True,
-                "scrape_enabled": True,
-                "images_enabled": False,
-                "tor_checked": True,
-                "tor_ok": True,
-                "tor_ip": "Current IP Address via Tor: 185.220.101.1",
-                "errors": [],
-                "results": [{"index": 1, "title": "Alpha"}],
-            },
-            {
-                "query": "beta",
-                "requested_amount": 2,
-                "returned_count": 1,
-                "proxy_enabled": True,
-                "scrape_enabled": True,
-                "images_enabled": False,
-                "tor_checked": True,
-                "tor_ok": True,
-                "tor_ip": "Current IP Address via Tor: 185.220.101.2",
-                "errors": [],
-                "results": [{"index": 1, "title": "Beta"}],
-            },
-        ]
 
-        result = module.batch_collect_dark_net([" alpha ", "beta"], 2)
+        with self.assertRaises(TypeError):
+            module.batch_collect_dark_net(["alpha"], 1, processes="10")
 
+        with self.assertRaises(TypeError):
+            module.batch_collect_dark_net(["alpha"], 1, processes=True)
+
+        with self.assertRaises(ValueError):
+            module.batch_collect_dark_net(["alpha"], 1, processes=0)
+
+    @patch("darkdump_collector._batch_collect_worker")
+    def test_batch_collect_dark_net_returns_success_items_in_input_order_and_prints_completion_order(self, mock_worker):
+        module = get_darkdump_collector_module()
+        executors = []
+
+        def worker_side_effect(index, key_word, amount, retry_times):
+            return {
+                "index": index,
+                "item": {
+                    "collected_date": f"2026-04-08",
+                    "collected_time": f"10:00:0{index}",
+                    "search_keyword": key_word,
+                    "status": "success",
+                    "collect_result": {
+                        "query": key_word,
+                        "requested_amount": amount,
+                        "returned_count": 1,
+                        "proxy_enabled": True,
+                        "scrape_enabled": True,
+                        "images_enabled": False,
+                        "tor_checked": True,
+                        "tor_ok": True,
+                        "tor_ip": f"Current IP Address via Tor: 185.220.101.{index + 1}",
+                        "errors": [],
+                        "results": [{"index": 1, "title": key_word.title()}],
+                    },
+                },
+            }
+
+        mock_worker.side_effect = worker_side_effect
+
+        def future_factory(fn, *args, **kwargs):
+            return FakeFuture(result=fn(*args, **kwargs))
+
+        def executor_factory(max_workers):
+            executor = FakeProcessPoolExecutor(max_workers, future_factory)
+            executors.append(executor)
+            return executor
+
+        def fake_as_completed(futures):
+            futures = list(futures)
+            return [futures[1], futures[0]]
+
+        with patch("darkdump_collector.ProcessPoolExecutor", side_effect=executor_factory), patch(
+            "darkdump_collector.as_completed", side_effect=fake_as_completed
+        ), patch("sys.stdout", new_callable=io.StringIO) as fake_stdout:
+            result = module.batch_collect_dark_net([" alpha ", "beta"], 2)
+
+        self.assertEqual(executors[0].max_workers, 2)
         self.assertEqual(result["requested_amount"], 2)
         self.assertEqual(result["keywords"], ["alpha", "beta"])
         self.assertEqual(result["success_count"], 2)
@@ -379,9 +453,11 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(len(result["items"]), 2)
         self.assertEqual(result["items"][0]["status"], "success")
         self.assertEqual(result["items"][0]["search_keyword"], "alpha")
-        self.assertIn("collect_result", result["items"][0])
-        self.assertRegex(result["items"][0]["collected_date"], r"^\d{4}-\d{2}-\d{2}$")
-        self.assertRegex(result["items"][0]["collected_time"], r"^\d{2}:\d{2}:\d{2}$")
+        self.assertEqual(result["items"][1]["status"], "success")
+        self.assertEqual(result["items"][1]["search_keyword"], "beta")
+
+        stdout = fake_stdout.getvalue()
+        self.assertLess(stdout.index("query=beta"), stdout.index("query=alpha"))
 
     def test_batch_collect_dark_net_rejects_invalid_keywords(self):
         module = get_darkdump_collector_module()
@@ -398,16 +474,64 @@ class CollectDarkNetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.batch_collect_dark_net(["alpha", "   "], 1)
 
-    @patch("darkdump_collector.collect_dark_net")
-    def test_batch_collect_dark_net_records_errors_and_continues(self, mock_collect_dark_net):
+    @patch("darkdump_collector._batch_collect_worker")
+    def test_batch_collect_dark_net_records_errors_and_continues(self, mock_worker):
         module = get_darkdump_collector_module()
-        mock_collect_dark_net.side_effect = [
-            {"query": "alpha", "requested_amount": 2, "returned_count": 0, "proxy_enabled": True, "scrape_enabled": True, "images_enabled": False, "tor_checked": True, "tor_ok": True, "tor_ip": "Current IP Address via Tor: 185.220.101.1", "errors": [], "results": []},
-            RuntimeError("tor down"),
-            {"query": "gamma", "requested_amount": 2, "returned_count": 1, "proxy_enabled": True, "scrape_enabled": True, "images_enabled": False, "tor_checked": True, "tor_ok": True, "tor_ip": "Current IP Address via Tor: 185.220.101.3", "errors": [], "results": [{"index": 1, "title": "Gamma"}]},
-        ]
+        executors = []
 
-        result = module.batch_collect_dark_net(["alpha", "beta", "gamma"], 2)
+        def worker_side_effect(index, key_word, amount, retry_times):
+            if key_word == "beta":
+                return {
+                    "index": index,
+                    "item": {
+                        "collected_date": "2026-04-08",
+                        "collected_time": "10:00:01",
+                        "search_keyword": key_word,
+                        "status": "error",
+                        "error": "tor down",
+                    },
+                }
+
+            return {
+                "index": index,
+                "item": {
+                    "collected_date": "2026-04-08",
+                    "collected_time": f"10:00:0{index}",
+                    "search_keyword": key_word,
+                    "status": "success",
+                    "collect_result": {
+                        "query": key_word,
+                        "requested_amount": amount,
+                        "returned_count": 1,
+                        "proxy_enabled": True,
+                        "scrape_enabled": True,
+                        "images_enabled": False,
+                        "tor_checked": True,
+                        "tor_ok": True,
+                        "tor_ip": f"Current IP Address via Tor: 185.220.101.{index + 1}",
+                        "errors": [],
+                        "results": [{"index": 1, "title": key_word.title()}],
+                    },
+                },
+            }
+
+        mock_worker.side_effect = worker_side_effect
+
+        def future_factory(fn, *args, **kwargs):
+            return FakeFuture(result=fn(*args, **kwargs))
+
+        def executor_factory(max_workers):
+            executor = FakeProcessPoolExecutor(max_workers, future_factory)
+            executors.append(executor)
+            return executor
+
+        def fake_as_completed(futures):
+            return list(futures)
+
+        with patch("darkdump_collector.ProcessPoolExecutor", side_effect=executor_factory), patch(
+            "darkdump_collector.as_completed", side_effect=fake_as_completed
+        ):
+            result = module.batch_collect_dark_net(["alpha", "beta", "gamma"], 2)
 
         self.assertEqual(result["success_count"], 2)
         self.assertEqual(result["failure_count"], 1)
@@ -415,69 +539,85 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(result["items"][1]["search_keyword"], "beta")
         self.assertEqual(result["items"][1]["error"], "tor down")
         self.assertEqual(result["items"][2]["status"], "success")
+        self.assertEqual(executors[0].max_workers, 3)
 
-    @patch("darkdump_collector.collect_dark_net")
-    def test_save_batch_collect_dark_net_to_excel_writes_expected_rows(self, mock_collect_dark_net):
+    def test_save_batch_collect_dark_net_to_excel_writes_expected_rows(self):
         from openpyxl import load_workbook
 
         module = get_darkdump_collector_module()
-        mock_collect_dark_net.side_effect = [
-            {
-                "query": "alpha",
-                "requested_amount": 2,
-                "returned_count": 2,
-                "proxy_enabled": True,
-                "scrape_enabled": True,
-                "images_enabled": False,
-                "tor_checked": True,
-                "tor_ok": True,
-                "tor_ip": "Current IP Address via Tor: 185.220.101.1",
-                "errors": [{"stage": "site", "url": "http://dead.onion", "message": "dead onion"}],
-                "results": [
-                    {
-                        "index": 1,
-                        "title": "Alpha 1",
-                        "description": "Primary listing",
-                        "onion_link": "http://alpha-1.onion",
-                        "keywords": ["alpha", "market"],
-                        "sentiment": {"polarity": 0.4, "subjectivity": 0.2},
-                        "metadata": {"description": "meta-1"},
-                        "links": ["https://example.com"],
-                        "link_count": 1,
-                        "emails": ["ops@alpha.onion"],
-                        "documents": ["docs/report.pdf"],
+        batch_result = {
+            "requested_amount": 2,
+            "keywords": ["alpha", "beta"],
+            "success_count": 2,
+            "failure_count": 0,
+            "items": [
+                {
+                    "collected_date": "2026-04-08",
+                    "collected_time": "10:00:00",
+                    "search_keyword": "alpha",
+                    "status": "success",
+                    "collect_result": {
+                        "query": "alpha",
+                        "requested_amount": 2,
+                        "returned_count": 2,
+                        "proxy_enabled": True,
+                        "scrape_enabled": True,
+                        "images_enabled": False,
+                        "tor_checked": True,
+                        "tor_ok": True,
+                        "tor_ip": "Current IP Address via Tor: 185.220.101.1",
+                        "errors": [{"stage": "site", "url": "http://dead.onion", "message": "dead onion"}],
+                        "results": [
+                            {
+                                "index": 1,
+                                "title": "Alpha 1",
+                                "description": "Primary listing",
+                                "onion_link": "http://alpha-1.onion",
+                                "keywords": ["alpha", "market"],
+                                "sentiment": {"polarity": 0.4, "subjectivity": 0.2},
+                                "metadata": {"description": "meta-1"},
+                                "links": ["https://example.com"],
+                                "link_count": 1,
+                                "emails": ["ops@alpha.onion"],
+                                "documents": ["docs/report.pdf"],
+                            },
+                            {
+                                "index": 2,
+                                "title": "Alpha 2",
+                                "description": "Secondary listing",
+                                "onion_link": "http://alpha-2.onion",
+                                "keywords": ["alpha", "backup"],
+                                "sentiment": {"polarity": 0.1, "subjectivity": 0.3},
+                                "metadata": {"description": "meta-2"},
+                                "links": ["https://example.org"],
+                                "link_count": 1,
+                                "emails": ["admin@alpha.onion"],
+                                "documents": [],
+                            },
+                        ],
                     },
-                    {
-                        "index": 2,
-                        "title": "Alpha 2",
-                        "description": "Secondary listing",
-                        "onion_link": "http://alpha-2.onion",
-                        "keywords": ["alpha", "backup"],
-                        "sentiment": {"polarity": 0.1, "subjectivity": 0.3},
-                        "metadata": {"description": "meta-2"},
-                        "links": ["https://example.org"],
-                        "link_count": 1,
-                        "emails": ["admin@alpha.onion"],
-                        "documents": [],
+                },
+                {
+                    "collected_date": "2026-04-08",
+                    "collected_time": "10:00:01",
+                    "search_keyword": "beta",
+                    "status": "success",
+                    "collect_result": {
+                        "query": "beta",
+                        "requested_amount": 2,
+                        "returned_count": 0,
+                        "proxy_enabled": True,
+                        "scrape_enabled": True,
+                        "images_enabled": False,
+                        "tor_checked": True,
+                        "tor_ok": True,
+                        "tor_ip": "Current IP Address via Tor: 185.220.101.2",
+                        "errors": [],
+                        "results": [],
                     },
-                ],
-            },
-            {
-                "query": "beta",
-                "requested_amount": 2,
-                "returned_count": 0,
-                "proxy_enabled": True,
-                "scrape_enabled": True,
-                "images_enabled": False,
-                "tor_checked": True,
-                "tor_ok": True,
-                "tor_ip": "Current IP Address via Tor: 185.220.101.2",
-                "errors": [],
-                "results": [],
-            },
-        ]
-
-        batch_result = module.batch_collect_dark_net(["alpha", "beta"], 2)
+                },
+            ],
+        }
 
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
             output_path = tmp_file.name
@@ -585,10 +725,11 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0][0], "采集日期")
 
-    def test_default_key_words_are_ten_non_empty_strings(self):
+    def test_default_key_words_are_non_empty_strings(self):
         module = get_darkdump_collector_module()
 
-        self.assertEqual(len(module.DEFAULT_KEY_WORDS), 10)
+        self.assertEqual(len(module.DEFAULT_KEY_WORDS), len(module.DEFAULT_KEY_WORDS_STR.split(",")))
+        self.assertGreater(len(module.DEFAULT_KEY_WORDS), 0)
         self.assertTrue(all(isinstance(key_word, str) and key_word.strip() for key_word in module.DEFAULT_KEY_WORDS))
         self.assertEqual(module.DEFAULT_AMOUNT, 20)
 
@@ -618,7 +759,7 @@ class CollectDarkNetTests(unittest.TestCase):
         self.assertEqual(result["excel_path"], "/tmp/darkdump_batch_results_20260408_153000.xlsx")
 
         stdout = fake_stdout.getvalue()
-        self.assertIn("Keyword count: 10", stdout)
+        self.assertIn(f"Keyword count: {len(module.DEFAULT_KEY_WORDS)}", stdout)
         self.assertIn("Amount per keyword: 20", stdout)
         self.assertIn("Success count: 8, Failure count: 2", stdout)
         self.assertIn("Excel saved to: /tmp/darkdump_batch_results_20260408_153000.xlsx", stdout)

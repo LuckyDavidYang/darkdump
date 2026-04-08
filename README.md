@@ -59,7 +59,7 @@ print(data["returned_count"])
 print(data["tor_ip"])
 print(data["results"][0]["onion_link"])
 
-batch_result = batch_collect_dark_net(["marketplaces", "forums"], 5)
+batch_result = batch_collect_dark_net(["marketplaces", "forums"], 5, processes=10)
 excel_path = save_batch_collect_dark_net_to_excel(batch_result, "darkdump_results.xlsx")
 print(excel_path)
 ```
@@ -69,12 +69,13 @@ print(excel_path)
 
 It returns structured data instead of printing the banner and per-site CLI output.
 Runtime collection failures are retried automatically, with `retry_times=3` by default.
+Each completed `collect_dark_net` call also prints a short console summary with the keyword, result count, Tor IP, and error count.
 When Tor is connected, the returned payload also includes `tor_ip`, for example:
 `Current IP Address via Tor: 185.220.101.1`
 
-`batch_collect_dark_net` processes a list of keywords with the same `amount`.
+`batch_collect_dark_net` processes a list of keywords with the same `amount` and uses `processes=10` by default.
 `save_batch_collect_dark_net_to_excel` writes one Excel row per `collect_dark_net(... )["results"]` item and keeps the worksheet name as `results`.
-`python3.12 darkdump_collector.py` runs the built-in `main()` flow with 10 editable default keywords, uses `amount=20`, and saves a timestamped Excel file such as `darkdump_batch_results_20260408_153000.xlsx`.
+`python3.12 darkdump_collector.py` runs the built-in `main()` flow with the current `DEFAULT_KEY_WORDS` list, uses `amount=20`, and saves a timestamped Excel file such as `darkdump_batch_results_20260408_153000.xlsx`.
 
 ## Menu
 ```
