@@ -48,12 +48,20 @@ MacOS: `brew services start tor`<br/>
 If you want to collect data programmatically instead of using CLI output:
 
 ```python
-from darkdump_collector import collect_dark_net
+from darkdump_collector import (
+    batch_collect_dark_net,
+    collect_dark_net,
+    save_batch_collect_dark_net_to_excel,
+)
 
 data = collect_dark_net("marketplaces", 5)
 print(data["returned_count"])
 print(data["tor_ip"])
 print(data["results"][0]["onion_link"])
+
+batch_result = batch_collect_dark_net(["marketplaces", "forums"], 5)
+excel_path = save_batch_collect_dark_net_to_excel(batch_result, "darkdump_results.xlsx")
+print(excel_path)
 ```
 
 `collect_dark_net` follows the same collection path as:
@@ -62,6 +70,9 @@ print(data["results"][0]["onion_link"])
 It returns structured data instead of printing the banner and per-site CLI output.
 When Tor is connected, the returned payload also includes `tor_ip`, for example:
 `Current IP Address via Tor: 185.220.101.1`
+
+`batch_collect_dark_net` processes a list of keywords with the same `amount`.
+`save_batch_collect_dark_net_to_excel` writes one Excel row per `collect_dark_net(... )["results"]` item and keeps the worksheet name as `results`.
 
 ## Menu
 ```
